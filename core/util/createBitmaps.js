@@ -6,6 +6,8 @@ var pMap = require('p-map');
 
 var runChromy = require('./runChromy');
 var runPuppet = require('./runPuppet');
+const puppeteer = require('puppeteer');
+const genericPool = require('generic-pool');
 
 const ensureDirectoryPath = require('./ensureDirectoryPath');
 var logger = require('./logger')('createBitmaps');
@@ -82,7 +84,9 @@ function decorateConfigForCapture (config, isReference) {
 }
 
 function saveViewportIndexes (viewport, index) {
-  return Object.assign({}, viewport, { vIndex: index });
+  return Object.assign({}, viewport, {
+    vIndex: index
+  });
 }
 
 function delegateScenarios (config) {
@@ -141,10 +145,32 @@ function delegateScenarios (config) {
       scenarioViews.forEach((scenarioView, i) => {
         scenarioView.assignedPort = freeports[i];
       });
-      return pMap(scenarioViews, runChromy, { concurrency: asyncCaptureLimit });
+      return pMap(scenarioViews, runChromy, {
+        concurrency: asyncCaptureLimit
+      });
     });
   } else if (config.engine.startsWith('puppet')) {
-    return pMap(scenarioViews, runPuppet, { concurrency: asyncCaptureLimit });
+    const opts = {
+      max: 10, // maximum size of the pool
+      min: 2 // minimum size of the pool
+    };
+    const factory = {
+      create: function () {
+        return puppeteer.launch();
+      },
+      destroy: function (browser) {
+        browser.close();
+      }
+    };
+    const myPool = genericPool.createPool(factory, opts);
+    scenarioViews.forEach(scenarioView => {
+      scenarioView.scenario.browserPool = myPool;
+    });
+    return pMap(scenarioViews, runPuppet, {
+      concurrency: asyncCaptureLimit
+    }).finally(() => {
+      myPool.drain().then(() => myPool.clear());
+    });
   } else {
     logger.error(`Engine "${(typeof config.engine === 'string' && config.engine) || 'undefined'}" not recognized! If you require PhantomJS or Slimer support please use backstopjs@3.8.8 or earlier.`);
   }

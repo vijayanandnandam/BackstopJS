@@ -1,6 +1,5 @@
 const MERGE_IMG_SEGMENT_HEIGHT = 2000;
 const puppeteer = require('puppeteer');
-
 const mergeImg = require('merge-img');
 const fs = require('./fs');
 const path = require('path');
@@ -53,19 +52,20 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
   const VP_W = viewport.width || viewport.viewport.width;
   const VP_H = viewport.height || viewport.viewport.height;
 
-  const puppeteerArgs = Object.assign(
-    {},
-    {
-      ignoreHTTPSErrors: true,
-      headless: !config.debugWindow
-    },
-    config.engineOptions
-  );
+  // const puppeteerArgs = Object.assign({}, {
+  //     ignoreHTTPSErrors: true,
+  //     headless: !config.debugWindow
+  //   },
+  //   config.engineOptions
+  // );
 
-  const browser = await puppeteer.launch(puppeteerArgs);
+  const browser = await scenario.browserPool.acquire(); // await puppeteer.launch(puppeteerArgs);
   const page = await browser.newPage();
 
-  page.setViewport({ width: VP_W, height: VP_H });
+  page.setViewport({
+    width: VP_W,
+    height: VP_H
+  });
   page.setDefaultNavigationTimeout(engineTools.getEngineOption(config, 'waitTimeout', TEST_TIMEOUT));
 
   if (isReference) {
@@ -247,7 +247,8 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
       error = e;
     }
   } else {
-    await browser.close();
+    scenario.browserPool.release(browser);
+    // await browser.close();
   }
 
   if (error) {
@@ -256,7 +257,7 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
     testPair.engineErrorMsg = error.message;
 
     compareConfig = {
-      testPairs: [ testPair ]
+      testPairs: [testPair]
     };
     fs.copy(config.env.backstop + ERROR_SELECTOR_PATH, filePath);
   }
@@ -276,7 +277,9 @@ async function delegateSelectors (
   selectors,
   selectorMap
 ) {
-  let compareConfig = { testPairs: [] };
+  let compareConfig = {
+    testPairs: []
+  };
   let captureDocument = false;
   let captureViewport = false;
   let captureList = [];
@@ -301,14 +304,20 @@ async function delegateSelectors (
   });
 
   if (captureDocument) {
-    captureJobs.push(function () { return captureScreenshot(page, browser, captureDocument, selectorMap, config, []); });
+    captureJobs.push(function () {
+      return captureScreenshot(page, browser, captureDocument, selectorMap, config, []);
+    });
   }
   // TODO: push captureViewport into captureList (instead of calling captureScreenshot()) to improve perf.
   if (captureViewport) {
-    captureJobs.push(function () { return captureScreenshot(page, browser, captureViewport, selectorMap, config, []); });
+    captureJobs.push(function () {
+      return captureScreenshot(page, browser, captureViewport, selectorMap, config, []);
+    });
   }
   if (captureList.length) {
-    captureJobs.push(function () { return captureScreenshot(page, browser, null, selectorMap, config, captureList); });
+    captureJobs.push(function () {
+      return captureScreenshot(page, browser, null, selectorMap, config, captureList);
+    });
   }
 
   return new Promise(function (resolve, reject) {
@@ -334,10 +343,12 @@ async function delegateSelectors (
     next();
   }).then(async () => {
     console.log(chalk.green('x Close Browser'));
-    await browser.close();
+    // await browser.close();
+    scenario.browserPool.release(browser);
   }).catch(async (err) => {
     console.log(chalk.red(err));
-    await browser.close();
+    scenario.browserPool.release(browser);
+    // await browser.close();
   }).then(_ => compareConfig);
 }
 
@@ -360,7 +371,10 @@ async function captureScreenshot (page, browser, selector, selectorMap, config, 
         const screenHeight = typeof config.mergeImgHack === 'number' ? config.mergeImgHack : MERGE_IMG_SEGMENT_HEIGHT;
 
         const bodyHandle = await page.$('body');
-        const { width, height: totalHeight } = await bodyHandle.boundingBox();
+        const {
+          width,
+          height: totalHeight
+        } = await bodyHandle.boundingBox();
 
         const screens = [];
         let cumHeight = 0;
@@ -374,10 +388,8 @@ async function captureScreenshot (page, browser, selector, selectorMap, config, 
               x: 0,
               y: i * screenHeight,
               width,
-              height:
-                cumHeight > totalHeight
-                  ? Math.ceil(screenHeight - (cumHeight - totalHeight))
-                  : screenHeight
+              height: cumHeight > totalHeight
+                ? Math.ceil(screenHeight - (cumHeight - totalHeight)) : screenHeight
             }
           });
           screens.push(screen);
@@ -422,7 +434,12 @@ async function captureScreenshot (page, browser, selector, selectorMap, config, 
         const box = await el.boundingBox();
         if (box) {
           var type = config.puppeteerOffscreenCaptureFix ? page : el;
-          var params = config.puppeteerOffscreenCaptureFix ? { path: path, clip: box } : { path: path };
+          var params = config.puppeteerOffscreenCaptureFix ? {
+            path: path,
+            clip: box
+          } : {
+            path: path
+          };
           await type.screenshot(params);
         } else {
           console.log(chalk.yellow(`Element not visible for capturing: ${s}`));
